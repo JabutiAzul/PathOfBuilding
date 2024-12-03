@@ -32,8 +32,13 @@ function calcs.hitChance(evasion, accuracy)
 	if accuracy < 0 then
 		return 5
 	end
-	local rawChance = accuracy / (accuracy + (evasion / 5) ^ 0.9) * 125
-	return m_max(m_min(round(rawChance), 100), 5)	
+	local rawChance = (accuracy * 125) / (accuracy + (evasion / 5) ^ 0.9) 
+	return m_max(m_min(m_floor(rawChance), 100), 5)	
+end
+
+function calcs.targetChance(evasion, accuracy)
+	local rawAccuracy = (((4)* ((evasion / 5) ^ 0.9)))
+	return m_max(m_ceil(rawAccuracy), 0)	
 end
 
 -- Calculate damage reduction from armour, float

@@ -1995,11 +1995,13 @@ function calcs.offence(env, actor, activeSkill)
 		else
 			local enemyEvasion = m_max(round(calcLib.val(enemyDB, "Evasion")), 0)
 			output.AccuracyHitChance = calcs.hitChance(enemyEvasion, accuracyVsEnemy) * calcLib.mod(skillModList, cfg, "HitChance")
+			output.AccuracyTarget = calcs.targetChance(enemyEvasion, accuracyVsEnemy)
 			if breakdown then
 				breakdown.AccuracyHitChance = {
 					"Enemy level: "..env.enemyLevel..(env.configInput.enemyLevel and " ^8(overridden from the Configuration tab" or " ^8(can be overridden in the Configuration tab)"),
 					"Enemy evasion: "..enemyEvasion,
 					"Approximate hit chance: "..output.AccuracyHitChance.."%",
+					"Needs "..output.AccuracyTarget.." accuracy rating for 100% hit chance",
 				}
 			end
 		end
