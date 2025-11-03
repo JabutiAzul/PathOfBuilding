@@ -34,6 +34,7 @@ local GemSelectClass = newClass("GemSelectControl", "EditControl", function(self
 	end
 	self.skillsTab = skillsTab
 	self.gems = { }
+	self.gemCount = 0
 	self:PopulateGemList()
 	self.index = index
 	self.gemChangeFunc = changeFunc
@@ -110,6 +111,7 @@ function GemSelectClass:PopulateGemList()
 	local showNormal = self.skillsTab.showSupportGemTypes == "NORMAL"
 	local matchLevel = self.skillsTab.defaultGemLevel == "characterLevel"
 	local characterLevel = self.skillsTab.build and self.skillsTab.build.characterLevel or 1
+	self.gemCount = 0
 
 	for gemId, gemData in pairs(self.skillsTab.build.data.gems) do
 		if (self.sortGemsBy and gemData.tags[self.sortGemsBy] == true or not self.sortGemsBy) then
@@ -117,18 +119,22 @@ function GemSelectClass:PopulateGemList()
 			if characterLevel >= levelRequirement or not matchLevel then
 				if (showAwakened or showAll) and gemData.grantedEffect.plusVersionOf then
 					self.gems["Default:" .. gemId] = gemData
+					self.gemCount = self.gemCount + 1
 				elseif showNormal or showAll then
 					if self.skillsTab.showAltQualityGems and (self.skillsTab.defaultGemQuality or 0) > 0 then
 						for _, altQual in ipairs(self.skillsTab:getGemAltQualityList(gemData)) do
 							self.gems[altQual.type .. ":" .. gemId] = gemData
+							self.gemCount = self.gemCount + 1
 						end
 					else
 						self.gems["Default:" .. gemId] = gemData
+						self.gemCount = self.gemCount + 1
 					end
 				end
 			end
 		end
 	end
+	ConPrintf("DEBUG: GemSelectControl populated %d gems in gems table", self.gemCount)
 end
 
 function GemSelectClass:GetQualityType(gemId)
@@ -243,7 +249,9 @@ function GemSelectClass:BuildList(buf)
 end
 
 function GemSelectClass:UpdateSortCache()
-	--local start = GetTime()
+	local start = GetTime()
+	local dpsEntries = 0
+	local canSupportEntries = 0
 	local sortCache = self.sortCache
 	local sameSortBy = self.sortGemsBy == self.lastSortGemsBy
 	-- Don't update the cache if no settings have changed that would impact the ordering
@@ -251,9 +259,13 @@ function GemSelectClass:UpdateSortCache()
 		and sortCache.outputRevision == self.skillsTab.build.outputRevision and sortCache.defaultLevel == self.skillsTab.defaultGemLevel
 		and (sortCache.characterLevel == self.skillsTab.build.characterLevel or self.skillsTab.defaultGemLevel ~= "characterLevel")
 		and sortCache.defaultQuality == self.skillsTab.defaultGemQuality and sortCache.sortType == self.skillsTab.sortGemsByDPSField
-		and sortCache.considerAlternates == self.skillsTab.showAltQualityGems and sortCache.considerGemType == self.skillsTab.showSupportGemTypes then
+		and sortCache.considerAlternates == self.skillsTab.showAltQualityGems and sortCache.considerGemType == self.skillsTab.showSupportGemTypes
+		and sortCache.displaySkillList == self.skillsTab.displayGroup.displaySkillList and sortCache.sortByDPS == self.skillsTab.sortGemsByDPS then
+		ConPrintf("DEBUG: GemSelectControl sortCache hit - reusing cached data")
 		return
 	end
+
+	ConPrintf("DEBUG: GemSelectControl rebuilding sortCache - gems: %d", self.gemCount)
 
 	if not sameSortBy or not sortCache or (sortCache.considerAlternates ~= self.skillsTab.showAltQualityGems or sortCache.considerGemType ~= self.skillsTab.showSupportGemTypes
 		or sortCache.defaultQuality ~= self.skillsTab.defaultGemQuality
@@ -276,7 +288,9 @@ function GemSelectClass:UpdateSortCache()
 		canSupport = { },
 		dps = { },
 		dpsColor = { },
-		sortType = self.skillsTab.sortGemsByDPSField
+		sortType = self.skillsTab.sortGemsByDPSField,
+		displaySkillList = self.skillsTab.displayGroup.displaySkillList,
+		sortByDPS = self.skillsTab.sortGemsByDPS
 	}
 	self.sortCache = sortCache
 
@@ -332,9 +346,11 @@ function GemSelectClass:UpdateSortCache()
 	local baseDPS = (dpsField == "FullDPS" and calcBase[dpsField] ~= nil and calcBase[dpsField]) or (calcBase.Minion and calcBase.Minion.CombinedDPS) or (calcBase[dpsField] ~= nil and calcBase[dpsField]) or 0
 
 	for gemId, gemData in pairs(self.gems) do
+		dpsEntries = dpsEntries + 1
 		sortCache.dps[gemId] = baseDPS
 		-- Ignore gems that don't support the active skill
 		if sortCache.canSupport[gemId] or (gemData.grantedEffect.hasGlobalEffect and not gemData.grantedEffect.support) then
+			canSupportEntries = canSupportEntries + 1
 			local output = self:CalcOutputWithThisGem(calcFunc, gemData, self:GetQualityType(gemId), useFullDPS)
 			-- Check for nil because some fields may not be populated, default to 0
 			sortCache.dps[gemId] = (dpsField == "FullDPS" and output[dpsField] ~= nil and output[dpsField]) or (output.Minion and output.Minion.CombinedDPS) or (output[dpsField] ~= nil and output[dpsField]) or 0
@@ -349,7 +365,8 @@ function GemSelectClass:UpdateSortCache()
 		end
 	end
 
-	--ConPrintf("Gem Selector time: %d ms", GetTime() - start)
+	ConPrintf("DEBUG: Gem Selector time: %d ms", GetTime() - start)
+	ConPrintf("DEBUG: GemSelectControl sortCache built - dps entries: %d, canSupport entries: %d", dpsEntries, canSupportEntries)
 end
 
 function GemSelectClass:SortGemList(gemList)

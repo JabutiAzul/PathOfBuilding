@@ -112,6 +112,7 @@ function main:Init()
 	self.POESESSID = ""
 	self.showPublicBuilds = true
 	self.showFlavourText = true
+	self.enableMemoryMonitoring = true
 
 	if not SetDPIScaleOverridePercent then SetDPIScaleOverridePercent = function(scale) end end
 
@@ -262,6 +263,14 @@ the "Releases" section of the GitHub page.]])
 			ConPrintf("Startup time: %d ms", GetTime() - launch.startTime)
 		end
 	}
+
+	-- Initialize idle memory monitoring without making it permanent
+	if not self.idleMemoryMonitorInitialized then
+		self.idleMemoryMonitorInitialized = true
+		self.idleMemorySamples = {}
+		self.lastIdleLogTime = GetTime()
+		self.idleMemoryStartTime = GetTime()
+	end
 
 	if not self.saveNewModCache then
 		local itemsCoroutine = coroutine.create(loadItemDBs)
@@ -484,8 +493,182 @@ function main:OnFrame()
 	wipeTable(self.inputEvents)
 
 	-- TODO: this pattern may pose memory management issues for classes that don't exist for the lifetime of the program
+	-- ConPrintf("DEBUG: Main.OnFrame executing onFrameFuncs, count: %d", #self.onFrameFuncs)
 	for _, onFrameFunc in pairs(self.onFrameFuncs) do
 		onFrameFunc()
+	end
+	-- Log onFrameFuncs that persist across multiple frames (separate loop to avoid double execution)
+	-- Clean up onFrameFuncPersistCount periodically to prevent memory growth
+	if not self.onFrameFuncPersistCount then
+		self.onFrameFuncPersistCount = {}
+	else
+		-- Clear the table periodically (every 1000 frames ~30 seconds at 30fps)
+		if not self.onFrameFuncPersistCleanupCounter then
+			self.onFrameFuncPersistCleanupCounter = 0
+		end
+		self.onFrameFuncPersistCleanupCounter = self.onFrameFuncPersistCleanupCounter + 1
+		if self.onFrameFuncPersistCleanupCounter >= 1000 then
+			wipeTable(self.onFrameFuncPersistCount)
+			self.onFrameFuncPersistCleanupCounter = 0
+		end
+	end
+
+	for funcName, onFrameFunc in pairs(self.onFrameFuncs) do
+		if not self.onFrameFuncPersistCount[onFrameFunc] then
+			self.onFrameFuncPersistCount[onFrameFunc] = { count = 0, name = funcName }
+		end
+		self.onFrameFuncPersistCount[onFrameFunc].count = self.onFrameFuncPersistCount[onFrameFunc].count + 1
+		if self.onFrameFuncPersistCount[onFrameFunc].count > 100 then -- Log if persists more than ~3 seconds at 30fps
+			ConPrintf("WARNING: onFrameFunc '%s' has persisted for %d frames", self.onFrameFuncPersistCount[onFrameFunc].name, self.onFrameFuncPersistCount[onFrameFunc].count)
+			self.onFrameFuncPersistCount[onFrameFunc].count = 0 -- Reset counter for this func
+		end
+		function main:MonitorMemoryUsage()
+			-- Initialize monitoring data if not exists
+			if not self.memoryMonitorData then
+				self.memoryMonitorData = {
+					lastLogTime = 0,
+					logInterval = 5000, -- Log every 5 seconds (adjustable)
+					metrics = {
+						luaMemory = 0,
+						onFrameFuncsCount = 0,
+						globalCacheSize = 0,
+						sortCacheSize = 0
+					},
+					history = {}
+				}
+			end
+
+			local currentTime = GetTime()
+			local data = self.memoryMonitorData
+
+			-- Collect current metrics
+			local luaMemory = collectgarbage("count")
+			local onFrameFuncsCount = 0
+			local persistentFuncs = {}
+			for name, func in pairs(self.onFrameFuncs) do
+				onFrameFuncsCount = onFrameFuncsCount + 1
+				if self.onFrameFuncPersistCount[func] and self.onFrameFuncPersistCount[func].count > 50 then
+					table.insert(persistentFuncs, name)
+				end
+			end
+
+			local globalCacheSize = 0
+			if GlobalCache and GlobalCache.cachedData then
+				for mode, modeCache in pairs(GlobalCache.cachedData) do
+					for _ in pairs(modeCache) do
+						globalCacheSize = globalCacheSize + 1
+					end
+				end
+			end
+
+			local sortCacheSize = 0
+			if self.modes and self.modes.BUILD and self.modes.BUILD.skillsTab and self.modes.BUILD.skillsTab.controls and self.modes.BUILD.skillsTab.controls.gemList then
+				for _, gemControl in pairs(self.modes.BUILD.skillsTab.controls.gemList) do
+					if gemControl.sortCache then
+						sortCacheSize = sortCacheSize + 1
+					end
+				end
+			end
+
+			-- Store current metrics
+			data.metrics.luaMemory = luaMemory
+			data.metrics.onFrameFuncsCount = onFrameFuncsCount
+			data.metrics.globalCacheSize = globalCacheSize
+			data.metrics.sortCacheSize = sortCacheSize
+
+			-- Periodic logging
+			if currentTime - data.lastLogTime >= data.logInterval then
+				local timeStr = os.date("%H:%M:%S", currentTime / 1000)
+				ConPrintf("MEMORY MONITOR [%s] | Lua: %dkB | onFrameFuncs: %d | GlobalCache: %d | sortCache: %d",
+					timeStr,
+					luaMemory,
+					onFrameFuncsCount,
+					globalCacheSize,
+					sortCacheSize
+				)
+
+				-- Log persistent functions
+				if #persistentFuncs > 0 then
+					ConPrintf("MEMORY MONITOR: Persistent onFrameFuncs: %s", table.concat(persistentFuncs, ", "))
+				end
+
+				data.lastLogTime = currentTime
+
+				-- Store history for potential analysis
+				table.insert(data.history, {
+					time = currentTime,
+					luaMemory = luaMemory,
+					onFrameFuncsCount = onFrameFuncsCount,
+					globalCacheSize = globalCacheSize,
+					sortCacheSize = sortCacheSize
+				})
+
+				-- Keep only last 100 entries to prevent memory growth
+				if #data.history > 100 then
+					table.remove(data.history, 1)
+				end
+
+				-- Log memory growth trends - more sensitive detection
+				if #data.history >= 2 then
+					local current = data.history[#data.history]
+					local previous = data.history[#data.history - 1]
+					local memoryGrowth = current.luaMemory - previous.luaMemory
+					if memoryGrowth > 5000 then -- More than 5KB growth in 5 seconds (reduced threshold)
+						ConPrintf("WARNING: Significant memory growth: +%dkB in 5s (Total: %dkB)", math.floor(memoryGrowth / 1024), math.floor(current.luaMemory / 1024))
+					end
+				end
+			end
+		end
+		onFrameFunc()
+	end
+
+	-- Memory monitoring
+	if self.enableMemoryMonitoring then
+		self:MonitorMemoryUsage()
+
+		-- Log input events that might accumulate
+		local inputEventCount = 0
+		for _ in ipairs(self.inputEvents) do
+			inputEventCount = inputEventCount + 1
+		end
+		if inputEventCount > 50 then -- Arbitrary threshold for potential accumulation
+			ConPrintf("WARNING: High input event count: %d", inputEventCount)
+		end
+
+		-- Log popup accumulation
+		if #self.popups > 5 then
+			ConPrintf("WARNING: High popup count: %d", #self.popups)
+		end
+
+		-- Idle memory monitoring (sample every 5 seconds instead of every frame)
+		local currentTime = GetTime()
+		local memoryUsage = collectgarbage("count")
+
+		-- Only sample every 5 seconds to prevent memory churn
+		if not self.lastIdleMemorySampleTime or currentTime - self.lastIdleMemorySampleTime >= 5000 then
+			local maxSamples = 60 -- Keep last 5 minutes of samples at 5s intervals
+			self.idleMemorySamples[(currentTime / 1000) % maxSamples] = {time = currentTime, memory = memoryUsage}
+
+			-- Keep only last 60 samples (5 minutes worth at 5s intervals)
+			if #self.idleMemorySamples > 60 then
+				table.remove(self.idleMemorySamples, 1)
+			end
+
+			self.lastIdleMemorySampleTime = currentTime
+		end
+
+		-- Log every 30 seconds during idle periods
+		if currentTime - self.lastIdleLogTime >= 30000 then
+			if #self.idleMemorySamples >= 6 then -- At least 30 seconds of data
+				local oldest = self.idleMemorySamples[1]
+				local newest = self.idleMemorySamples[#self.idleMemorySamples]
+				local growthRate = (newest.memory - oldest.memory) / ((newest.time - oldest.time) / 1000) -- KB per second
+				if growthRate > 10 then -- More than 10KB/s growth
+					ConPrintf("WARNING: Idle memory growth rate: %.1f KB/s over %d seconds", growthRate, (newest.time - oldest.time) / 1000)
+				end
+			end
+			self.lastIdleLogTime = currentTime
+		end
 	end
 end
 
@@ -645,6 +828,9 @@ function main:LoadSettings(ignoreBuild)
 				if node.attrib.showFlavourText then
 					self.showFlavourText = node.attrib.showFlavourText == "true"
 				end
+				if node.attrib.enableMemoryMonitoring then
+					self.enableMemoryMonitoring = node.attrib.enableMemoryMonitoring == "true"
+				end
 				if node.attrib.dpiScaleOverridePercent then
 					self.dpiScaleOverridePercent = tonumber(node.attrib.dpiScaleOverridePercent) or 0
 					SetDPIScaleOverridePercent(self.dpiScaleOverridePercent)
@@ -768,6 +954,7 @@ function main:SaveSettings()
 		showPublicBuilds = tostring(self.showPublicBuilds),
 		showFlavourText = tostring(self.showFlavourText),
 		dpiScaleOverridePercent = tostring(self.dpiScaleOverridePercent),
+		enableMemoryMonitoring = tostring(self.enableMemoryMonitoring),
 	} })
 	local res, errMsg = common.xml.SaveXMLFile(setXML, self.userPath.."Settings.xml")
 	if not res then
@@ -970,6 +1157,11 @@ function main:OpenOptionsPopup()
 	end)
 
 	nextRow()
+	controls.enableMemoryMonitoring = new("CheckBoxControl", { "TOPLEFT", nil, "TOPLEFT" }, { defaultLabelPlacementX, currentY, 20 }, "^7Enable Memory Monitoring (Debug):", function(state)
+		self.enableMemoryMonitoring = state
+	end)
+
+	nextRow()
 	drawSectionHeader("build", "Build-related options")
 
 	controls.showThousandsSeparators = new("CheckBoxControl", { "TOPLEFT", nil, "TOPLEFT"}, { defaultLabelPlacementX, currentY, 20 }, "^7Show thousands separators:", function(state)
@@ -1058,6 +1250,7 @@ function main:OpenOptionsPopup()
 	controls.titlebarName.state = self.showTitlebarName
 	controls.showPublicBuilds.state = self.showPublicBuilds
 	controls.showFlavourText.state = self.showFlavourText
+	controls.enableMemoryMonitoring.state = self.enableMemoryMonitoring
 	local initialNodePowerTheme = self.nodePowerTheme
 	local initialColorPositive = self.colorPositive
 	local initialColorNegative = self.colorNegative
@@ -1079,6 +1272,7 @@ function main:OpenOptionsPopup()
 	local initialShowPublicBuilds = self.showPublicBuilds
 	local initialShowFlavourText = self.showFlavourText
 	local initialDpiScaleOverridePercent = self.dpiScaleOverridePercent
+	local initialEnableMemoryMonitoring = self.enableMemoryMonitoring
 
 	-- last line with buttons has more spacing
 	nextRow(1.5)
@@ -1133,6 +1327,7 @@ function main:OpenOptionsPopup()
 		self.showPublicBuilds = initialShowPublicBuilds
 		self.showFlavourText = initialShowFlavourText
 		self.dpiScaleOverridePercent = initialDpiScaleOverridePercent
+		self.enableMemoryMonitoring = initialEnableMemoryMonitoring
 		SetDPIScaleOverridePercent(self.dpiScaleOverridePercent)
 		main:ClosePopup()
 	end)

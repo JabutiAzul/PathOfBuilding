@@ -97,7 +97,7 @@ function Inflate(data)
 	return ""
 end
 function GetTime()
-	return 0
+	return os.clock() * 1000 -- Convert to milliseconds for consistency with main app
 end
 function GetScriptPath()
 	return ""
@@ -171,40 +171,61 @@ function require(name)
 end
 
 
-dofile("Launch.lua")
+-- Skip launching if we're running a test
+if not arg or not arg[1] or arg[1] ~= "test" then
+	dofile("Launch.lua")
 
--- Prevents loading of ModCache
--- Allows running mod parsing related tests without pushing ModCache
--- The CI env var will be true when run from github workflows but should be false for other tools using the headless wrapper 
-mainObject.continuousIntegrationMode = os.getenv("CI")
+	-- Prevents loading of ModCache
+	-- Allows running mod parsing related tests without pushing ModCache
+	-- The CI env var will be true when run from github workflows but should be false for other tools using the headless wrapper
+	mainObject.continuousIntegrationMode = os.getenv("CI")
 
-runCallback("OnInit")
-runCallback("OnFrame") -- Need at least one frame for everything to initialise
+	runCallback("OnInit")
+	runCallback("OnFrame") -- Need at least one frame for everything to initialise
 
-if mainObject.promptMsg then
-	-- Something went wrong during startup
-	print(mainObject.promptMsg)
-	io.read("*l")
-	return
+	if mainObject.promptMsg then
+		-- Something went wrong during startup
+		print(mainObject.promptMsg)
+		io.read("*l")
+		return
+	end
+
+	-- The build module; once a build is loaded, you can find all the good stuff in here
+	build = mainObject.main.modes["BUILD"]
+
+	-- Here's some helpful helper functions to help you get started
+	function newBuild()
+		mainObject.main:SetMode("BUILD", false, "Help, I'm stuck in Path of Building!")
+		runCallback("OnFrame")
+	end
+	function loadBuildFromXML(xmlText, name)
+		mainObject.main:SetMode("BUILD", false, name or "", xmlText)
+		runCallback("OnFrame")
+	end
+	function loadBuildFromJSON(getItemsJSON, getPassiveSkillsJSON)
+		mainObject.main:SetMode("BUILD", false, "")
+		runCallback("OnFrame")
+		local charData = build.importTab:ImportItemsAndSkills(getItemsJSON)
+		build.importTab:ImportPassiveTreeAndJewels(getPassiveSkillsJSON, charData)
+		-- You now have a build without a correct main skill selected, or any configuration options set
+		-- Good luck!
+	end
+else
+	-- Test mode: initialize minimal setup
+	mainObject = {
+		main = {
+			onFrameFuncs = {},
+			enableMemoryMonitoring = true,
+			modes = {
+				BUILD = {
+					skillsTab = {
+						controls = {
+							gemList = {}
+						}
+					}
+				}
+			}
+		}
+	}
 end
 
--- The build module; once a build is loaded, you can find all the good stuff in here
-build = mainObject.main.modes["BUILD"]
-
--- Here's some helpful helper functions to help you get started
-function newBuild()
-	mainObject.main:SetMode("BUILD", false, "Help, I'm stuck in Path of Building!")
-	runCallback("OnFrame")
-end
-function loadBuildFromXML(xmlText, name)
-	mainObject.main:SetMode("BUILD", false, name or "", xmlText)
-	runCallback("OnFrame")
-end
-function loadBuildFromJSON(getItemsJSON, getPassiveSkillsJSON)
-	mainObject.main:SetMode("BUILD", false, "")
-	runCallback("OnFrame")
-	local charData = build.importTab:ImportItemsAndSkills(getItemsJSON)
-	build.importTab:ImportPassiveTreeAndJewels(getPassiveSkillsJSON, charData)
-	-- You now have a build without a correct main skill selected, or any configuration options set
-	-- Good luck!
-end

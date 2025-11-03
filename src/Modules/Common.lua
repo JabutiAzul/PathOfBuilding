@@ -787,6 +787,9 @@ function cacheData(uuid, env)
 		ActiveSkill = env.player.mainSkill,
 		Env = env,
 	}
+	GlobalCache.timestamps[env.mode][uuid] = GlobalCache.accessCounter
+	GlobalCache.accessCounter = GlobalCache.accessCounter + 1
+	GlobalCache.cleanup()
 end
 
 -- Wipe all the tables associated with Global Cache
@@ -794,6 +797,10 @@ function wipeGlobalCache()
 	wipeTable(GlobalCache.cachedData.MAIN)
 	wipeTable(GlobalCache.cachedData.CALCS)
 	wipeTable(GlobalCache.cachedData.CALCULATOR)
+	wipeTable(GlobalCache.timestamps.MAIN)
+	wipeTable(GlobalCache.timestamps.CALCS)
+	wipeTable(GlobalCache.timestamps.CALCULATOR)
+	GlobalCache.accessCounter = 0
 end
 
 -- Check if a specific named gem is enabled in a socket group belonging to a skill

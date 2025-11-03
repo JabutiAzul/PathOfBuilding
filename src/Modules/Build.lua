@@ -896,7 +896,7 @@ function buildMode:Shutdown()
 	if launch.devMode and (not main.disableDevAutoSave) and self.targetVersion and not self.abortSave then
 		if self.dbFileName then
 			self:SaveDBFile()
-		elseif self.unsaved then		
+		elseif self.unsaved then
 			self.dbFileName = main.buildPath.."~~temp~~.xml"
 			self.buildName = "~~temp~~"
 			self.dbFileSubPath = ""
@@ -904,6 +904,11 @@ function buildMode:Shutdown()
 		end
 	end
 	self.abortSave = nil
+
+	-- Clean up background processors in TradeQuery
+	if self.itemsTab and self.itemsTab.tradeQuery then
+		self.itemsTab.tradeQuery:Destroy()
+	end
 
 	self.savers = nil
 end
@@ -913,6 +918,11 @@ function buildMode:GetArgs()
 end
 
 function buildMode:CloseBuild()
+	-- Clean up background processors in TradeQuery before closing
+	if self.itemsTab and self.itemsTab.tradeQuery then
+		self.itemsTab.tradeQuery:Destroy()
+	end
+
 	main:SetWindowTitleSubtext()
 	main:SetMode("LIST", self.dbFileName and self.buildName, self.dbFileSubPath)
 end

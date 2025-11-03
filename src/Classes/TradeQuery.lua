@@ -47,11 +47,6 @@ local TradeQueryClass = newClass("TradeQuery", function(self, itemsTab)
 	-- realm id-text table to pair realm name with API parameter
 	self.realmIds = {}
 
-	self.tradeQueryRequests = new("TradeQueryRequests")
-	main.onFrameFuncs["TradeQueryRequests"] = function()
-		self.tradeQueryRequests:ProcessQueue()
-	end
-
 	-- set
 	self.hostName = "https://www.pathofexile.com/"
 end)
@@ -218,8 +213,25 @@ end
 -- Opens the item pricing popup
 function TradeQueryClass:PriceItem()
 	self.tradeQueryGenerator = new("TradeQueryGenerator", self)
+	ConPrintf("DEBUG: TradeQuery created tradeQueryGenerator instance")
 	main.onFrameFuncs["TradeQueryGenerator"] = function()
+		local startTime = GetTime()
 		self.tradeQueryGenerator:OnFrame()
+		local duration = GetTime() - startTime
+		if duration > 500 then -- More than 500ms processing time (query generation can be intensive)
+			ConPrintf("WARNING: TradeQueryGenerator processing took %d ms", duration)
+		end
+	end
+	
+	self.tradeQueryRequests = new("TradeQueryRequests")
+	ConPrintf("DEBUG: TradeQuery created tradeQueryRequests instance")
+	main.onFrameFuncs["TradeQueryRequests"] = function()
+		local startTime = GetTime()
+		self.tradeQueryRequests:ProcessQueue()
+		local duration = GetTime() - startTime
+		if duration > 100 then -- More than 100ms processing time
+			ConPrintf("WARNING: TradeQueryRequests processing took %d ms", duration)
+		end
 	end
 
 	-- Set main Price Builder pane height and width
@@ -503,6 +515,8 @@ Highest Weight - Displays the order retrieved from trade]]
 	self.controls.fullPrice = new("LabelControl", {"BOTTOM", nil, "BOTTOM"}, {0, -row_height - pane_margins_vertical - row_vertical_padding, pane_width - 2 * pane_margins_horizontal, row_height}, "")
 	self.controls.close = new("ButtonControl", {"BOTTOM", nil, "BOTTOM"}, {0, -pane_margins_vertical, 90, row_height}, "Done", function()
 		main:ClosePopup()
+		-- Clean up background processors when closing the pane
+		self:Destroy()
 		-- there's a case where if you have a socket(s) allocated, open TradeQuery, close it, dealloc, then open TradeQuery again
 		-- the deallocated socket controls were still showing, so this will remove all dynamically created controls from items
 		wipeItemControls()
@@ -1137,4 +1151,20 @@ function TradeQueryClass:UpdateRealms()
 		}
 		setRealmDropList()
 	end
+end
+
+-- Method to clean up background processors
+function TradeQueryClass:Destroy()
+	ConPrintf("DEBUG: TradeQuery:Destroy() called - cleaning up onFrameFuncs")
+	-- Remove the onFrameFuncs to stop background processing
+	local requestsRemoved = main.onFrameFuncs["TradeQueryRequests"] ~= nil
+	local generatorRemoved = main.onFrameFuncs["TradeQueryGenerator"] ~= nil
+	main.onFrameFuncs["TradeQueryRequests"] = nil
+	main.onFrameFuncs["TradeQueryGenerator"] = nil
+	ConPrintf("DEBUG: TradeQuery cleanup - TradeQueryRequests removed: %s, TradeQueryGenerator removed: %s", tostring(requestsRemoved), tostring(generatorRemoved))
+	-- Clean up tradeQueryGenerator if it exists
+	if self.tradeQueryGenerator and self.tradeQueryGenerator.Destroy then
+		self.tradeQueryGenerator:Destroy()
+	end
+	ConPrintf("DEBUG: TradeQuery background processors cleaned up")
 end

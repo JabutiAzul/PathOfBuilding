@@ -351,5 +351,93 @@ SkillType = {
 
 GlobalCache = { 
 	cachedData = { MAIN = {}, CALCS = {}, CALCULATOR = {} },
+	timestamps = { MAIN = {}, CALCS = {}, CALCULATOR = {} },
+	accessCounter = 0,
+	maxSize = 10000,
 }
 
+-- Set up metatables for automatic timestamp updates on read access
+for mode in pairs(GlobalCache.cachedData) do
+	setmetatable(GlobalCache.cachedData[mode], {
+		__index = function(t, k)
+			local v = rawget(t, k)
+			if v then
+				GlobalCache.timestamps[mode][k] = GlobalCache.accessCounter
+				GlobalCache.accessCounter = GlobalCache.accessCounter + 1
+			end
+			return v
+		end
+	})
+end
+
+-- Cleanup function to remove oldest entries when size limit exceeded
+function GlobalCache.cleanup()
+	local totalSize = 0
+	for mode in pairs(GlobalCache.cachedData) do
+		for _ in pairs(GlobalCache.cachedData[mode]) do
+			totalSize = totalSize + 1
+		end
+	end
+	while totalSize > GlobalCache.maxSize do
+		local oldestMode, oldestUuid, minTs = nil, nil, math.huge
+		for mode, modeTs in pairs(GlobalCache.timestamps) do
+			for uuid, ts in pairs(modeTs) do
+				if ts < minTs then
+					minTs = ts
+					oldestMode = mode
+					oldestUuid = uuid
+				end
+			end
+		end
+		if oldestMode then
+			GlobalCache.cachedData[oldestMode][oldestUuid] = nil
+			GlobalCache.timestamps[oldestMode][oldestUuid] = nil
+			totalSize = totalSize - 1
+		else
+			break -- No more entries to remove
+		end
+	end
+end
+
+-- Set up metatables for automatic timestamp updates on read access
+for mode in pairs(GlobalCache.cachedData) do
+	setmetatable(GlobalCache.cachedData[mode], {
+		__index = function(t, k)
+			local v = rawget(t, k)
+			if v then
+				GlobalCache.timestamps[mode][k] = GlobalCache.accessCounter
+				GlobalCache.accessCounter = GlobalCache.accessCounter + 1
+			end
+			return v
+		end
+	})
+end
+
+-- Cleanup function to remove oldest entries when size limit exceeded
+function GlobalCache.cleanup()
+	local totalSize = 0
+	for mode in pairs(GlobalCache.cachedData) do
+		for _ in pairs(GlobalCache.cachedData[mode]) do
+			totalSize = totalSize + 1
+		end
+	end
+	while totalSize > GlobalCache.maxSize do
+		local oldestMode, oldestUuid, minTs = nil, nil, math.huge
+		for mode, modeTs in pairs(GlobalCache.timestamps) do
+			for uuid, ts in pairs(modeTs) do
+				if ts < minTs then
+					minTs = ts
+					oldestMode = mode
+					oldestUuid = uuid
+				end
+			end
+		end
+		if oldestMode then
+			GlobalCache.cachedData[oldestMode][oldestUuid] = nil
+			GlobalCache.timestamps[oldestMode][oldestUuid] = nil
+			totalSize = totalSize - 1
+		else
+			break -- No more entries to remove
+		end
+	end
+end
